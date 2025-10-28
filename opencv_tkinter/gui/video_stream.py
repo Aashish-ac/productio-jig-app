@@ -79,6 +79,12 @@ class VideoStreamWindow:
         """Start the video stream - thread-safe version"""
         if self.is_streaming:
             return
+        
+        # Wait for any previous thread to finish
+        if hasattr(self, 'stream_thread') and self.stream_thread and self.stream_thread.is_alive():
+            self.stop_stream()
+            # Wait a moment for cleanup
+            time.sleep(0.5)
             
         rtsp_url = self.url_var.get().strip()
         if not rtsp_url:
@@ -140,16 +146,29 @@ class VideoStreamWindow:
             _start_stream_internal()
 
     def stream_loop(self):
-        """Main video streaming loop"""
+        """Main video streaming loop - with proper error handling"""
         fps_counter = 0
         fps_start_time = time.time()
         last_photo = None  # Keep reference to prevent GC
+        frame_count = 0
         
-        while self.is_streaming and self.cap and self.cap.isOpened():
+        while self.is_streaming and self.cap:
             try:
+                # Check if cap is opened
+                if not self.cap.isOpened():
+                    break
+                
                 ret, frame = self.cap.read()
                 if not ret:
-                    break
+                    frame_count += 1
+                    # If we fail to read for 10 consecutive frames, assume stream is dead
+                    if frame_count >= 10:
+                        self.parent_app.log_message("Stream timeout - no frames received", 'error')
+                        break
+                    time.sleep(0.1)  # Wait a bit before retrying
+                    continue
+                
+                frame_count = 0  # Reset on successful read
                 
                 self.current_frame = frame.copy()
                 frame = self.resize_frame(frame, max_width=760, max_height=480)
@@ -185,24 +204,37 @@ class VideoStreamWindow:
                 
                 time.sleep(0.01)
                 
+            except cv2.error as cv_err:
+                self.parent_app.log_message(f"OpenCV error: {cv_err}", 'error')
+                break
             except Exception as e:
-                def _log_error():
-                    if hasattr(self.parent_app, 'log_message'):
-                        self.parent_app.log_message(f"Stream error: {e}", 'error')
-                try:
-                    self.parent_app.root.after_idle(_log_error)
-                except:
-                    print(f"Stream error: {e}")
+                self.parent_app.log_message(f"Stream error: {e}", 'error')
                 break
         
-        self.stop_stream()
+        # Call stop_stream safely from thread
+        self.parent_app.root.after_idle(self.stop_stream)
 
     def stop_stream(self):
-        """Stop the video stream - thread-safe version"""
+        """Stop the video stream - thread-safe version with proper cleanup"""
         self.is_streaming = False
+        
+        # Wait for thread to finish (with timeout to avoid hanging)
+        if hasattr(self, 'stream_thread') and self.stream_thread and self.stream_thread.is_alive():
+            try:
+                self.stream_thread.join(timeout=1.0)
+            except:
+                pass
+        
+        # Release VideoCapture properly to prevent segfault on restart
         if self.cap:
-            self.cap.release()
+            try:
+                self.cap.release()
+            except:
+                pass
             self.cap = None
+        
+        # Clear current frame
+        self.current_frame = None
         
         # Thread-safe GUI updates
         def _update_gui():
@@ -217,21 +249,20 @@ class VideoStreamWindow:
                     self.url_entry.configure(state='normal')
                 
                 if hasattr(self, 'stream_status_var'):
-                    self.stream_status_var.set("⏹️ Stopped")
+                    self.stream_status_var.set("Ready")
                 if hasattr(self, 'video_label'):
-                    self.video_label.configure(image='', text="📺 Click ▶️ to start stream")
+                    self.video_label.configure(image='', text="📺 Click ▶ to start stream")
+                    self.video_label.image = None  # Clear reference to prevent memory leak
             except Exception as e:
                 print(f"Error updating GUI: {e}")
         
-        # ALWAYS schedule on main thread to avoid "main thread is not in main loop" error
+        # ALWAYS schedule on main thread
         try:
             if self.parent_app and self.parent_app.root:
                 self.parent_app.root.after_idle(_update_gui)
             else:
-                # Fallback if not yet initialized
-                pass
+                _update_gui()
         except RuntimeError:
-            # Main loop not ready - skip GUI update
             pass
         except Exception as e:
             print(f"Error scheduling GUI update: {e}")
