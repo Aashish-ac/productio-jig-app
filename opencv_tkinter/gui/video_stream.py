@@ -18,55 +18,62 @@ class VideoStreamWindow:
         self.create_video_widgets()
         
     def create_video_widgets(self):
-        """Create video stream widgets in the provided frame"""
-        # Make controls frame more compact
-        controls_frame = tk.Frame(self.video_frame, bg=self.parent_app.colors['card_bg'], height=30)
-        controls_frame.pack(fill='x', padx=2, pady=2)
+        """Create video stream widgets with proper layout"""
+        # Controls frame - Proper height
+        controls_frame = tk.Frame(self.video_frame, bg=self.parent_app.colors['card_bg'], height=45)
+        controls_frame.pack(fill='x', padx=5, pady=5)
         controls_frame.pack_propagate(False)
         
-        # URL input
-        tk.Label(controls_frame, text="RTSP:", 
-                bg=self.parent_app.colors['card_bg'], 
-                fg=self.parent_app.colors['text']).pack(side='left', padx=5)
+        # RTSP URL label and entry - Full width
+        tk.Label(controls_frame, text="RTSP:",
+                bg=self.parent_app.colors['card_bg'],
+                fg=self.parent_app.colors['text'],
+                font=('Helvetica Neue', 10)).pack(side='left', padx=8)
         
         self.url_var = tk.StringVar(value=self.default_rtsp_url)
-        self.url_entry = ttk.Entry(controls_frame, textvariable=self.url_var, 
-                                 width=25,
-                                 style='Form.TEntry')
-        self.url_entry.pack(side='left', padx=5)
+        self.url_entry = tk.Entry(controls_frame, textvariable=self.url_var,
+                                 bg='#3c3c3c', fg='#ffffff',
+                                 font=('Helvetica Neue', 10),
+                                 relief='flat',
+                                 highlightthickness=1,
+                                 highlightbackground='#555555',
+                                 highlightcolor='#007acc',
+                                 insertbackground='white')
+        self.url_entry.pack(side='left', padx=5, fill='x', expand=True, ipady=5)
         
-        # Control buttons
-        self.start_btn = ttk.Button(controls_frame, text="▶️", 
-                                   command=self.start_stream, 
+        # Control buttons with icons
+        self.start_btn = ttk.Button(controls_frame, text="▶",
+                                   command=self.start_stream,
                                    style='Success.TButton', width=3)
-        self.start_btn.pack(side='left', padx=2)
+        self.start_btn.pack(side='left', padx=3)
         
-        self.stop_btn = ttk.Button(controls_frame, text="⏹️", 
-                                  command=self.stop_stream, 
+        self.stop_btn = ttk.Button(controls_frame, text="⏹",
+                                  command=self.stop_stream,
                                   style='Danger.TButton', width=3,
                                   state='disabled')
-        self.stop_btn.pack(side='left', padx=2)
+        self.stop_btn.pack(side='left', padx=3)
         
-        # Screenshot button
-        self.screenshot_btn = ttk.Button(controls_frame, text="📸", 
-                                       command=self.take_screenshot, 
+        self.screenshot_btn = ttk.Button(controls_frame, text="📸",
+                                       command=self.take_screenshot,
                                        style='Modern.TButton', width=3,
                                        state='disabled')
-        self.screenshot_btn.pack(side='left', padx=2)
+        self.screenshot_btn.pack(side='left', padx=3)
         
-        # Status label
+        # Status - Right aligned
         self.stream_status_var = tk.StringVar(value="Ready")
         self.status_label = tk.Label(controls_frame, textvariable=self.stream_status_var,
-                                    bg=self.parent_app.colors['card_bg'], 
-                                    fg=self.parent_app.colors['text_secondary'])
-        self.status_label.pack(side='right', padx=5)
+                                    bg=self.parent_app.colors['card_bg'],
+                                    fg=self.parent_app.colors['text_secondary'],
+                                    font=('Helvetica Neue', 10))
+        self.status_label.pack(side='right', padx=10)
         
-        # Video display label - make it larger
-        self.video_label = tk.Label(self.video_frame, 
-                                   text="📺 Click ▶️ to start stream",
-                                   bg=self.parent_app.colors['card_bg'], 
-                                   fg=self.parent_app.colors['text_secondary'])
-        self.video_label.pack(fill='both', expand=True, padx=2, pady=2)
+        # Video display - Larger with proper sizing
+        self.video_label = tk.Label(self.video_frame,
+                                   text="📺 Click ▶ to start stream",
+                                   bg=self.parent_app.colors['bg'],
+                                   fg=self.parent_app.colors['text_secondary'],
+                                   font=('Helvetica Neue', 14))
+        self.video_label.pack(fill='both', expand=True, padx=5, pady=5)
 
     def start_stream(self):
         """Start the video stream - thread-safe version"""

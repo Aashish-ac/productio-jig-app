@@ -33,7 +33,8 @@ class CameraTestGUI:
         self.employee_name = employee_name or "Unknown User"
         
         self.root.title(self.get_window_title())
-        self.root.geometry("1200x800")
+        self.root.geometry("1400x900")
+        self.root.minsize(1200, 800)
         self.root.resizable(True, True)
         
         # Save original stdout before any redirection
@@ -49,6 +50,10 @@ class CameraTestGUI:
         
         # Setup logging
         self.setup_logging()
+        
+        # Save employee to database
+        self.db.add_employee(self.employee_id, self.employee_name)
+        self.logger.info(f"Employee logged in: {self.employee_name} ({self.employee_id})")
         
         self.styles = GUIStyles()
         self.setup_window()
@@ -164,64 +169,137 @@ class CameraTestGUI:
         self.boot_ready_delay_ms = 10000
         
     def create_main_layout(self):
-        """Create main window layout with video area and logs"""
-        # Make window larger to accommodate all sections
-        self.root.geometry("1200x800")
+        """Create main window layout with proper spacing and sizing"""
+        # Set larger window size for better UX
+        self.root.geometry("1400x900")
+        self.root.minsize(1200, 800)
         
-        # Left panel (controls)
-        self.left_frame = tk.Frame(self.root, bg=self.colors['bg'], width=300)
-        self.left_frame.pack(side='left', fill='y', padx=5, pady=5)
-        self.left_frame.pack_propagate(False)
+        # Left panel with scrollbar - widened to accommodate scrollbar
+        left_container = tk.Frame(self.root, bg=self.colors['bg'], width=335)
+        left_container.pack(side='left', fill='y', padx=8, pady=8)
+        left_container.pack_propagate(False)
+        
+        # Canvas for scrolling - width leaves room for scrollbar
+        canvas = tk.Canvas(left_container, bg=self.colors['bg'], 
+                          highlightthickness=0, width=305)
+        canvas.pack(side="left", fill="both", expand=True)
+        
+        # Scrollbar
+        scrollbar = ttk.Scrollbar(left_container, orient="vertical", command=canvas.yview)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Scrollable frame
+        scrollable_frame = tk.Frame(canvas, bg=self.colors['bg'])
+        
+        # Create canvas window with proper width
+        canvas_window = canvas.create_window((0, 0), window=scrollable_frame, 
+                                            anchor="nw", width=305)
+        
+        # Configure scroll region update
+        def _configure_scroll(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            # Update window width to match canvas width
+            canvas.itemconfig(canvas_window, width=canvas.winfo_width())
+        
+        scrollable_frame.bind("<Configure>", _configure_scroll)
+        canvas.bind("<Configure>", _configure_scroll)
+        
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Enable mouse wheel scrolling (cross-platform) - only when over left panel
+        def _on_mousewheel(event):
+            if left_container.winfo_containing(event.x_root, event.y_root):
+                canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+        def _on_scroll(event):
+            if left_container.winfo_containing(event.x_root, event.y_root):
+                if event.num == 4:  # Linux scroll up
+                    canvas.yview_scroll(-1, "units")
+                elif event.num == 5:  # Linux scroll down
+                    canvas.yview_scroll(1, "units")
+        
+        # Bind mousewheel only when mouse is over left panel
+        def _bind_mousewheel(event):
+            canvas.bind_all("<MouseWheel>", _on_mousewheel)
+            canvas.bind_all("<Button-4>", _on_scroll)
+            canvas.bind_all("<Button-5>", _on_scroll)
+        
+        def _unbind_mousewheel(event):
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+        
+        left_container.bind("<Enter>", _bind_mousewheel)
+        left_container.bind("<Leave>", _unbind_mousewheel)
+        
+        # Store canvas reference for updating
+        self.left_canvas = canvas
+        
+        # Make scrollable_frame the main left_frame
+        self.left_frame = scrollable_frame
         
         # Right side container
         right_container = tk.Frame(self.root, bg=self.colors['bg'])
-        right_container.pack(side='right', fill='both', expand=True, padx=5, pady=5)
+        right_container.pack(side='right', fill='both', expand=True, padx=8, pady=8)
         
-        # Video frame (top) - Add minimum size constraints
+        # === VIDEO SECTION ===
+        # Video frame (top) - Gets majority of space
         video_container = ttk.Frame(right_container, style='Card.TFrame')
-        video_container.pack(fill='both', expand=True, pady=(0, 5))
-        video_container.configure(height=400)
-        video_container.pack_propagate(False)
-        self.video_frame = ttk.Frame(video_container)
-        self.video_frame.pack(fill='both', expand=True)
+        video_container.pack(fill='both', expand=True, pady=(0, 8))
         
-        # Logs frame (bottom)
-        logs_container = ttk.Frame(right_container, style='Card.TFrame')
-        logs_container.pack(fill='x', pady=(5, 0))
-        logs_container.pack_propagate(False)
-        logs_container.configure(height=200)
+        # Video title bar
+        video_title = tk.Frame(video_container, bg=self.colors['card_bg'], height=45)
+        video_title.pack(fill='x')
+        video_title.pack_propagate(False)
         
-        # Create logs header
-        logs_header = tk.Frame(logs_container, bg=self.colors['card_bg'])
-        logs_header.pack(fill='x', padx=10, pady=5)
-        
-        tk.Label(logs_header, text="[Log] Terminal Log",
+        tk.Label(video_title, text="📹 Camera Live View",
                 bg=self.colors['card_bg'],
                 fg=self.colors['text'],
-                font=('Helvetica Neue', 10, 'bold')).pack(side='left')
+                font=('Helvetica Neue', 12, 'bold')).pack(side='left', padx=15, pady=10)
+        
+        # Video display area
+        self.video_frame = ttk.Frame(video_container)
+        self.video_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        # === TERMINAL LOG SECTION ===
+        # Logs frame (bottom) - Fixed height for visibility
+        logs_container = ttk.Frame(right_container, style='Card.TFrame')
+        logs_container.pack(fill='x', pady=(8, 0))
+        logs_container.pack_propagate(False)
+        logs_container.configure(height=280)
+        
+        # Logs header
+        logs_header = tk.Frame(logs_container, bg=self.colors['card_bg'], height=45)
+        logs_header.pack(fill='x')
+        logs_header.pack_propagate(False)
+        
+        tk.Label(logs_header, text="📋 Terminal Log",
+                bg=self.colors['card_bg'],
+                fg=self.colors['text'],
+                font=('Helvetica Neue', 11, 'bold')).pack(side='left', padx=15, pady=10)
         
         # Logs controls
-        ttk.Button(logs_header, text="[Clear] Clear", 
+        ttk.Button(logs_header, text="Clear", 
                   command=self.clear_logs,
-                  style='Modern.TButton').pack(side='right', padx=5)
+                  style='Modern.TButton').pack(side='right', padx=8)
         
-        ttk.Button(logs_header, text="[Save] Save", 
+        ttk.Button(logs_header, text="Save", 
                   command=self.save_logs,
                   style='Modern.TButton').pack(side='right')
         
         tk.Checkbutton(logs_header, text="Auto-scroll",
                        variable=self.autoscroll_var,
                        bg=self.colors['card_bg'],
-                       fg=self.colors['text']).pack(side='right', padx=10)
+                       fg=self.colors['text'],
+                       selectcolor=self.colors['bg']).pack(side='right', padx=12, pady=10)
         
-        # Create logs text area
+        # Logs text area - Fill remaining space
         self.logs_text = scrolledtext.ScrolledText(
             logs_container,
             bg=self.colors['bg'],
             fg=self.colors['text'],
             font=('Consolas', 9),
-            wrap=tk.WORD,
-            height=10)
+            wrap=tk.WORD)
         self.logs_text.pack(fill='both', expand=True, padx=10, pady=(0, 10))
         
         # Configure text tags
@@ -231,8 +309,8 @@ class CameraTestGUI:
         self.logs_text.tag_configure('error', foreground='#FF6B6B')
         self.logs_text.tag_configure('ready', foreground='#FF69B4', font=('Consolas', 9, 'bold'))
         
-        # Add initial log message
-        self.log_message("Terminal initialized - TEST MESSAGE", 'status')
+        # Add initial log
+        self.log_message("Terminal initialized - Ready", 'status')
 
     def create_widgets(self):
         """Create all GUI widgets"""
@@ -252,18 +330,21 @@ class CameraTestGUI:
         self.create_control_panel()
 
     def create_connection_panel(self):
-        """Create connection control panel"""
-        conn_frame = ttk.Frame(self.left_frame, style='Card.TFrame', padding=15)
-        conn_frame.pack(fill='x', pady=(0, 15))
+        """Create connection control panel with proper spacing"""
+        conn_frame = ttk.Frame(self.left_frame, style='Card.TFrame', padding=12)
+        conn_frame.pack(fill='x', pady=(0, 12))
         
         # Title
-        ttk.Label(conn_frame, text="[Connect] Connection", 
-                 style='Title.TLabel').pack(anchor='w')
+        ttk.Label(conn_frame, text="Connection", 
+                 style='Title.TLabel').pack(anchor='w', pady=(0, 10))
         
-        # Port selection
-        port_frame = ttk.Frame(conn_frame)
-        port_frame.pack(fill='x', pady=5)
-        ttk.Label(port_frame, text="Port:").pack(side='left')
+        # Port selection - Full width
+        port_label = tk.Label(conn_frame, text="Serial Port:",
+                         bg=self.colors['card_bg'],
+                         fg=self.colors['text'],
+                         font=('Helvetica Neue', 10))
+        port_label.pack(anchor='w', pady=(5, 2))
+        
         # Populate with available ports
         available_ports = SerialHandler.get_available_ports()
         # Always include the default port if not in the list
@@ -271,10 +352,10 @@ class CameraTestGUI:
         if preferred not in available_ports:
             available_ports.append(preferred)
         
-        self.port_combo = ttk.Combobox(port_frame, textvariable=self.port_var, 
+        self.port_combo = ttk.Combobox(conn_frame, textvariable=self.port_var, 
                                       values=available_ports,
-                                      width=25, state='readonly')
-        self.port_combo.pack(side='left', padx=5)
+                                      state='readonly')
+        self.port_combo.pack(fill='x', pady=(0, 8))
         
         # Set default selection
         if preferred in available_ports:
@@ -282,20 +363,23 @@ class CameraTestGUI:
         elif available_ports:
             self.port_var.set(available_ports[0])
         
-        # Baud selection
-        baud_frame = ttk.Frame(conn_frame)
-        baud_frame.pack(fill='x', pady=5)
-        ttk.Label(baud_frame, text="Baud:").pack(side='left')
-        self.baud_combo = ttk.Combobox(baud_frame, textvariable=self.baud_var,
-                                      values=["9600","19200","38400","57600","115200"],
-                                      width=10, state='readonly')
-        self.baud_combo.pack(side='left', padx=5)
+        # Baud selection - Full width
+        baud_label = tk.Label(conn_frame, text="Baud Rate:",
+                         bg=self.colors['card_bg'],
+                         fg=self.colors['text'],
+                         font=('Helvetica Neue', 10))
+        baud_label.pack(anchor='w', pady=(5, 2))
         
-        # Connect button
+        self.baud_combo = ttk.Combobox(conn_frame, textvariable=self.baud_var,
+                                      values=["9600","19200","38400","57600","115200"],
+                                      state='readonly')
+        self.baud_combo.pack(fill='x', pady=(0, 10))
+        
+        # Connect button - Full width
         self.connect_btn = ttk.Button(conn_frame, text="⚡ Connect",
                                     command=self.toggle_connection,
                                     style='Success.TButton')
-        self.connect_btn.pack(pady=5)
+        self.connect_btn.pack(fill='x', ipady=6)
 
     def create_status_panel(self):
         """Create status display panel"""
@@ -331,29 +415,58 @@ class CameraTestGUI:
                                            textvariable=self.camera_serial_var,
                                            style='Form.TEntry')
         self.camera_serial_entry.pack(fill='x', pady=2)
+        
+        # === Save Results Button ===
+        self.save_results_btn = ttk.Button(status_frame, 
+                                          text="💾 Save Test Results",
+                                          command=self.save_test_results,
+                                          style='Success.TButton')
+        self.save_results_btn.pack(fill='x', pady=(10, 0))
+        
+        # Add helpful label
+        help_label = tk.Label(status_frame,
+                             text="Click to save all test results",
+                             bg=self.colors['card_bg'],
+                             fg=self.colors['text_secondary'],
+                             font=('Helvetica Neue', 8))
+        help_label.pack(pady=(2, 0))
+        
+        # === View Results Button ===
+        view_results_btn = ttk.Button(status_frame,
+                                     text="📊 View All Results",
+                                     command=self.open_results_viewer,
+                                     style='Modern.TButton')
+        view_results_btn.pack(fill='x', pady=(5, 0))
 
     # === NEW METHOD: Update button states based on test progression ===
     def update_test_states(self):
-        """Enable/disable controls based on test completion"""
+        """Enable/disable controls based on test completion and save results"""
         # Check if buttons exist before trying to configure them
         if not hasattr(self, 'irled_on_btn'):
             return
-            
-        # IR LED controls enabled only if LED test passed
+        
+        # Update test results dictionary when checkboxes change
+        self.test_results['led_test'] = 'PASS' if self.led_test_passed.get() else 'NOT_TESTED'
+        self.test_results['irled_test'] = 'PASS' if self.irled_test_passed.get() else 'NOT_TESTED'
+        self.test_results['ircut_test'] = 'PASS' if self.ircut_test_passed.get() else 'NOT_TESTED'
+        self.test_results['speaker_test'] = 'PASS' if self.speaker_test_passed.get() else 'NOT_TESTED'
+        
+        # Update camera serial
+        self.test_results['camera_serial'] = self.camera_serial_var.get()
+        
+        # Enable/disable next test controls based on progression
         ir_led_state = 'normal' if self.led_test_passed.get() else 'disabled'
         self.irled_on_btn.config(state=ir_led_state)
         self.irled_off_btn.config(state=ir_led_state)
         
-        # IRCUT controls enabled only if IR LED test passed
         ircut_state = 'normal' if self.irled_test_passed.get() else 'disabled'
         self.ircut_on_btn.config(state=ircut_state)
         self.ircut_off_btn.config(state=ircut_state)
         
-        # Speaker test enabled only if IRCUT test passed
         speaker_state = 'normal' if self.ircut_test_passed.get() else 'disabled'
         self.speaker_test_btn.config(state=speaker_state)
         
-        # Log the test progression
+        # Log progression
         if self.led_test_passed.get():
             self.log_message("✅ LED Test PASSED - IR LED unlocked", 'status')
         if self.irled_test_passed.get():
@@ -362,8 +475,63 @@ class CameraTestGUI:
             self.log_message("✅ IRCUT Test PASSED - Speaker unlocked", 'status')
         if self.speaker_test_passed.get():
             self.log_message("✅ Speaker Test PASSED - All tests complete!", 'status')
-            # Auto-save when all tests pass
-            self.check_and_save_results()
+        
+        # Check if ready to save
+        self.check_and_save_results()
+    
+    def check_and_save_results(self):
+        """Check if all tests complete and prompt to save (only for all PASS)"""
+        all_passed = (
+            self.led_test_passed.get() and
+            self.irled_test_passed.get() and
+            self.ircut_test_passed.get() and
+            self.speaker_test_passed.get()
+        )
+        
+        if all_passed:
+            # Get camera serial
+            camera_serial = self.camera_serial_var.get().strip()
+            if not camera_serial:
+                # Don't auto-save if no serial, just prompt user
+                return
+            
+            # Prompt to save (only once when all tests pass)
+            if not hasattr(self, '_save_prompt_shown'):
+                self._save_prompt_shown = True
+                response = messagebox.askyesno(
+                    "Save Test Results?",
+                    f"All tests PASSED for camera {camera_serial}!\n\n"
+                    f"Save results to database?"
+                )
+                
+                if response:
+                    self.save_test_results()
+                else:
+                    self._save_prompt_shown = False
+        
+        # Note: Manual save is always allowed via save button, even if some tests failed
+    
+    def reset_test_session(self):
+        """Reset test session for next camera"""
+        # Reset checkboxes
+        self.led_test_passed.set(False)
+        self.irled_test_passed.set(False)
+        self.ircut_test_passed.set(False)
+        self.speaker_test_passed.set(False)
+        
+        # Clear camera serial
+        self.camera_serial_var.set("")
+        
+        # Reset prompt flag
+        self._save_prompt_shown = False
+        
+        # Reset button states
+        self.update_test_states()
+        
+        # Log reset
+        self.log_message("=" * 60, 'status')
+        self.log_message("✨ Ready for next camera test", 'status')
+        self.log_message("=" * 60, 'status')
 
     def create_control_panel(self):
         """Create control panel with action buttons and test checkboxes"""
@@ -493,16 +661,6 @@ class CameraTestGUI:
         ttk.Button(common_frame, text="[STATUS] STATUS",
                   command=lambda: self.send_command("ps"),
                   style='Modern.TButton', width=10).pack(side='left', padx=2)
-        
-        # === Save Results Button ===
-        save_frame = ttk.Frame(control_frame)
-        save_frame.pack(fill='x', pady=10)
-        
-        self.save_results_btn = ttk.Button(save_frame, 
-                                          text="[Save] Save Test Results",
-                                          command=self.save_test_results,
-                                          style='Success.TButton')
-        self.save_results_btn.pack(fill='x')
 
     def show_terminal(self):
         """Show terminal window"""
@@ -700,15 +858,84 @@ class CameraTestGUI:
             messagebox.showerror("Error", "No employee ID found!")
             return
 
+        # Get camera serial from entry field
+        camera_serial = self.camera_serial_var.get().strip()
+        if not camera_serial:
+            messagebox.showwarning("Warning", "Please enter Camera Serial Number")
+            return
+
+        # Save employee to database
+        self.db.add_employee(self.employee_id, self.employee_name)
+
+        # Prepare test data with proper PASS/FAIL status
+        # Convert NOT_TESTED to FAIL and ensure all fields have values
+        test_data = {
+            'camera_serial': camera_serial,
+            'led_test': 'PASS' if self.led_test_passed.get() else 'FAIL',
+            'irled_test': 'PASS' if self.irled_test_passed.get() else 'FAIL',
+            'ircut_test': 'PASS' if self.ircut_test_passed.get() else 'FAIL',
+            'speaker_test': 'PASS' if self.speaker_test_passed.get() else 'FAIL',
+            'notes': self.test_results.get('notes', '')
+        }
+
+        # Show confirmation dialog before saving
+        passed_count = sum([1 for k, v in test_data.items() if k.endswith('_test') and v == 'PASS'])
+        failed_count = sum([1 for k, v in test_data.items() if k.endswith('_test') and v == 'FAIL'])
+        
+        confirm_msg = (
+            f"Save test results to database?\n\n"
+            f"Camera Serial: {camera_serial}\n"
+            f"Employee: {self.employee_name}\n\n"
+            f"Tests Passed: {passed_count}/4\n"
+            f"Tests Failed: {failed_count}/4"
+        )
+        
+        response = messagebox.askyesno("Confirm Save", confirm_msg)
+        
+        if not response:
+            return
+        
         try:
-            test_id = self.db.save_test_result(self.employee_id, self.test_results)
+            test_id = self.db.save_test_result(self.employee_id, test_data)
             if test_id:
-                messagebox.showinfo("Success", "Test results saved successfully!")
-                # Reset test results
-                for key in self.test_results:
-                    if key not in ['camera_serial', 'notes']:
-                        self.test_results[key] = 'NOT_TESTED'
+                # Create detailed log message
+                test_summary = ", ".join([f"{k}: {v}" for k, v in test_data.items() if k.endswith('_test')])
+                self.log_message(f"✓ Test results saved (ID: {test_id}) - {test_summary}", 'status')
+                self.logger.info(f"Test saved: Employee={self.employee_id}, Camera={camera_serial}, Results={test_data}")
+                # Count passed/failed tests
+                passed = sum([1 for k, v in test_data.items() if k.endswith('_test') and v == 'PASS'])
+                failed = sum([1 for k, v in test_data.items() if k.endswith('_test') and v == 'FAIL'])
+                
+                messagebox.showinfo("Success", 
+                    f"Test results saved successfully!\n\n"
+                    f"Employee: {self.employee_name} ({self.employee_id})\n"
+                    f"Camera: {camera_serial}\n"
+                    f"Tests Passed: {passed}/4\n"
+                    f"Tests Failed: {failed}/4\n"
+                    f"Test ID: {test_id}")
+                
+                # Reset for next camera
+                self.reset_test_session()
             else:
                 messagebox.showerror("Error", "Failed to save test results")
         except Exception as e:
+            self.logger.error(f"Failed to save results: {e}")
             messagebox.showerror("Error", f"Failed to save results: {str(e)}")
+    
+    def open_results_viewer(self):
+        """Open results viewer window"""
+        import subprocess
+        import sys
+        from pathlib import Path
+        
+        # Get path to view_results.py
+        project_root = Path(__file__).resolve().parent.parent.parent
+        viewer_path = project_root / "opencv_tkinter" / "view_results.py"
+        
+        # Launch in separate process
+        try:
+            subprocess.Popen([sys.executable, str(viewer_path)])
+            self.log_message("📊 Opened Results Viewer", 'status')
+        except Exception as e:
+            self.logger.error(f"Failed to open viewer: {e}")
+            messagebox.showerror("Error", f"Failed to open viewer: {e}")

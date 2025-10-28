@@ -5,6 +5,8 @@ Database Viewer - View test results and statistics
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
+from pathlib import Path
+import os
 from utils.database import DatabaseManager
 from datetime import datetime
 
@@ -14,7 +16,10 @@ class DatabaseViewer:
         self.root.title("📊 Test Results Database Viewer")
         self.root.geometry("1000x600")
         
-        self.db = DatabaseManager()
+        # Use same database path as main application
+        project_root = Path(__file__).resolve().parent.parent
+        db_path = os.path.join(project_root, "data", "camera_tests.db")
+        self.db = DatabaseManager(db_path)
         
         # Colors
         self.colors = {
