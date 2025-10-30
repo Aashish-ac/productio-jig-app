@@ -7,7 +7,8 @@ import sys
 import asyncio
 import logging
 from pathlib import Path
-from PyQt6.QtWidgets import QApplication, QTableWidgetItem
+from typing import Optional
+from PyQt6.QtWidgets import QApplication, QTableWidgetItem, QMessageBox
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QColor
 import qasync
@@ -48,9 +49,12 @@ class CameraTestApp:
         
         # LED state tracking (for toggle functionality)
         self.led_states = {}  # Track LED states per camera
+        
+        # Event loop reference (will be set when app starts)
+        self._event_loop = None
     
-    async def initialize_database(self):
-        """Initialize database connection"""
+    def initialize_database(self):
+        """Initialize database connection (synchronous)"""
         try:
             self.database = Database(
                 db_host=self.config.DB_HOST,
@@ -61,7 +65,7 @@ class CameraTestApp:
                 pool_size=self.config.DB_POOL_SIZE,
                 max_overflow=self.config.DB_MAX_OVERFLOW
             )
-            await self.database.create_tables()
+            self.database.initialize()  # Synchronous call
             logger.info("✓ Database initialized")
         except Exception as e:
             logger.warning(f"Database initialization skipped: {e}")
@@ -133,7 +137,8 @@ class CameraTestApp:
     def show_login(self):
         """Show login window"""
         self.login_window = LoginWindow()
-        self.login_window.login_successful.connect(self.on_login_success)
+        # Connect login signal (synchronous now)
+        self.login_window.login_successful.connect(self.on_login_attempt)
         
         # Login window already has proper styling in login_window.py
         # No need to override it here
@@ -142,20 +147,122 @@ class CameraTestApp:
         self.login_window.show()
         logger.info("✓ Login window displayed")
     
-    def on_login_success(self, employee_id: str, employee_name: str, role: str):
-        """Handle successful login"""
-        logger.info(f"Login successful: {employee_name} ({employee_id}) as {role}")
+    def on_login_attempt(self, employee_id: str, employee_name: str, role: str, password: str):
+        """Handle login attempt - verify with database (synchronous)"""
+        if not self.database:
+            QMessageBox.critical(
+                self.login_window,
+                "Database Error",
+                "Database not available. Cannot verify credentials."
+            )
+            logger.error("Login failed: Database not available")
+            return
         
-        self.current_user = {
-            'id': employee_id,
-            'name': employee_name
-        }
-        self.current_role = role
+        # Handle empty password string
+        password_arg = password if password else None
+        
+        # Call authentication directly - synchronous now
+        self._authenticate_and_login(employee_id, employee_name, role, password_arg)
+    
+    def _authenticate_and_login(self, employee_id: str, employee_name: str, role: str, password: Optional[str]):
+        """Authenticate user with database and proceed with login (synchronous)"""
+        try:
+            # Authenticate user (synchronous call)
+            user = self.database.authenticate_user(
+                employee_id=employee_id,
+                name=employee_name,
+                provided_password=password
+            )
+            
+            if not user:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(
+                    self.login_window,
+                    "Authentication Failed",
+                    "Invalid credentials. Please check your Employee ID, Name, and Password."
+                )
+                logger.warning(f"Authentication failed: {employee_id}")
+                return
+            
+            # Verify role matches (user is dict)
+            if user.get('role', '').lower() != role.lower():
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(
+                    self.login_window,
+                    "Role Mismatch",
+                    f"Selected role ({role}) does not match your account role ({user.get('role')})"
+                )
+                logger.warning(f"Role mismatch: {employee_id} - selected {role}, actual {user.get('role')}")
+                return
+            
+            # Successful authentication
+            logger.info(f"✓ User authenticated: {employee_name} ({employee_id}) as {user.get('role')}")
+            
+            # Store user info and admin linkage
+            admin_db_id = user.get('admin_id')
+            admin_emp_id = None
+            if user.get('role') == 'user' and admin_db_id:
+                # Lookup admin employee_id by DB id
+                admin_user = self.database.get_user_by_db_id(admin_db_id)
+                if admin_user:
+                    admin_emp_id = admin_user.employee_id
+            
+            self.current_user = {
+                'id': employee_id,
+                'name': employee_name,
+                'db_id': user.get('id'),
+                'admin_db_id': admin_db_id,
+                'admin_employee_id': admin_emp_id
+            }
+            self.current_role = user.get('role')
+            
+            # Show appropriate UI
+            self.on_login_success(employee_id, employee_name, user.get('role'))
+            
+        except Exception as e:
+            logger.error(f"Authentication error: {e}", exc_info=True)
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(
+                self.login_window,
+                "Error",
+                f"Authentication error: {str(e)}"
+            )
+
+    def logout(self):
+        """Return to login window and clear session"""
+        logger.info("Logging out...")
+        try:
+            # Close main/admin windows if open
+            if self.main_window and self.main_window.isVisible():
+                self.main_window.close()
+                self.main_window = None
+            if self.admin_window and self.admin_window.isVisible():
+                self.admin_window.close()
+                self.admin_window = None
+            
+            # Clear session state
+            self.current_user = None
+            self.current_role = None
+            
+            # Show login window again
+            self.show_login()
+            logger.info("✓ Returned to login window")
+        except Exception as e:
+            logger.error(f"Logout error: {e}")
+    
+    def on_login_success(self, employee_id: str, employee_name: str, role: str):
+        """Handle successful login - show appropriate dashboard"""
+        logger.info(f"Login successful: {employee_name} ({employee_id}) as {role}")
         
         # Show admin dashboard for admin, regular interface for users
         if role == "admin":
             # Create admin dashboard
-            self.admin_window = AdminDashboard(employee_id, employee_name)
+            self.admin_window = AdminDashboard(
+                employee_id, 
+                employee_name,
+                database=self.database,
+                parent_app=self
+            )
             self.admin_window.show()
             logger.info("✓ Admin dashboard displayed")
         else:
@@ -171,12 +278,24 @@ class CameraTestApp:
             self.main_window.websocket_manager = self.websocket_manager
             self.main_window._parent_app = self
             
+            # If we have admin employee id, show it on UI
+            admin_emp_id = None
+            if self.current_user:
+                admin_emp_id = self.current_user.get('admin_employee_id')
+            if admin_emp_id and hasattr(self.main_window, 'set_admin_id'):
+                self.main_window.set_admin_id(admin_emp_id)
+            
             # Connect test buttons (Phase 3)
             self.connect_test_buttons()
             
             # Show main window
             self.main_window.show()
             logger.info("✓ Main window displayed")
+        
+        # Now close login window (dashboard/main window is already visible)
+        if self.login_window:
+            self.login_window.close()
+            self.login_window = None
     
     def connect_test_buttons(self):
         """Connect test button signals - STORE LOOP REFERENCE"""
@@ -216,21 +335,10 @@ class CameraTestApp:
                 QTimer.singleShot(0, schedule_task)
             return handler
         
-        # Save button handler
+        # Save button handler (now synchronous)
         def save_handler():
-            def schedule_task():
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(self.save_results())
-                except RuntimeError:
-                    if self._event_loop and not self._event_loop.is_closed():
-                        self._event_loop.create_task(self.save_results())
-                    else:
-                        logger.error("No valid event loop for save_results")
-                except Exception as e:
-                    logger.error(f"Error scheduling save_results: {e}")
-            
-            QTimer.singleShot(0, schedule_task)
+            # Direct synchronous call - no async needed
+            self.save_results()
         
         # Connect buttons to handlers
         panel.led_btn.clicked.connect(make_handler("led_test"))
@@ -410,8 +518,8 @@ class CameraTestApp:
         # Auto-resize columns for better visibility
         table.resizeColumnsToContents()
     
-    async def save_results(self):
-        """Save test results to database"""
+    def save_results(self):
+        """Save test results to database (synchronous)"""
         if not self.main_window:
             logger.error("Main window not available")
             return
@@ -530,7 +638,7 @@ class CameraTestApp:
             await self.websocket_manager.disconnect()
         
         if self.database:
-            await self.database.close()
+            self.database.close()  # Synchronous now
         
         logger.info("✓ Cleanup complete")
 
@@ -543,6 +651,9 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Camera Test Tool V2")
     app.setStyle('Fusion')  # Cross-platform consistent appearance
+    
+    # Prevent app from quitting when login window closes (we'll show dashboard/main window)
+    app.setQuitOnLastWindowClosed(False)
     
     # Create qasync event loop
     loop = qasync.QEventLoop(app)
@@ -560,7 +671,7 @@ def main():
             if camera_app.websocket_manager:
                 loop.run_until_complete(camera_app.websocket_manager.disconnect())
             if camera_app.database:
-                loop.run_until_complete(camera_app.database.close())
+                camera_app.database.close()  # Synchronous now
             logger.info("✓ Cleanup complete")
         except Exception as e:
             logger.error(f"Cleanup error: {e}")
@@ -568,38 +679,47 @@ def main():
     # Don't connect cleanup to aboutToQuit here - it triggers too early
     # Cleanup will be handled when window is actually closed
     
-    # Initialize Phase 1 components (async operations)
-    async def initialize():
-        try:
-            await camera_app.initialize_database()
-            camera_app.setup_telnet_callbacks()
-            camera_app.setup_websocket_callbacks()
-            
-            # Disable test buttons initially (waiting for PCB ready)
-            camera_app.disable_test_buttons()
-            
-            # Show login window
-            camera_app.show_login()
-            
-            logger.info("✓ Application initialized")
-        except Exception as e:
-            logger.error(f"Initialization error: {e}", exc_info=True)
+    # Store event loop reference BEFORE initialization (so it's available immediately)
+    camera_app._event_loop = loop
     
-    # Run initialization
+    # Initialize components (database is now synchronous)
     try:
-        loop.run_until_complete(initialize())
+        camera_app.initialize_database()  # Synchronous
+        camera_app.setup_telnet_callbacks()
+        camera_app.setup_websocket_callbacks()
+        
+        # Disable test buttons initially (waiting for PCB ready)
+        camera_app.disable_test_buttons()
+        
+        # Show login window
+        camera_app.show_login()
+        
+        logger.info("✓ Application initialized")
     except Exception as e:
-        logger.error(f"Failed to initialize: {e}", exc_info=True)
+        logger.error(f"Initialization error: {e}", exc_info=True)
         return
     
-    # Setup cleanup for actual app exit
+    # Setup cleanup for actual app exit (always run on quit)
     def safe_cleanup():
+        """Cleanup resources when app is quitting"""
         try:
+            # Always cleanup on app quit (not conditional)
             cleanup()
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"Cleanup warning (ignored): {e}")
     
+    # Only connect cleanup to actual quit, not window close
     app.aboutToQuit.connect(safe_cleanup)
+    
+    # Handle last window closed - quit app when dashboard/main window closes
+    def on_last_window_closed():
+        """Handle last window closed - quit app when main windows are closed"""
+        # Only quit if the main/admin windows are closed (not just login window)
+        if not (camera_app.main_window and camera_app.main_window.isVisible()) and \
+           not (camera_app.admin_window and camera_app.admin_window.isVisible()):
+            app.quit()
+    
+    app.lastWindowClosed.connect(on_last_window_closed)
     
     # Run Qt event loop - USE app.exec() not loop.run_forever()
     with loop:
@@ -607,7 +727,7 @@ def main():
             sys.exit(app.exec())
         except KeyboardInterrupt:
             logger.info("Application interrupted by user")
-            safe_cleanup()
+            cleanup()
             sys.exit(0)
 
 

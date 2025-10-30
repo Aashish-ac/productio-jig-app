@@ -87,6 +87,8 @@ class HeaderBar(QWidget):
         self.user_name = user_name
         self.employee_id = employee_id
         self.role = role
+        self.admin_id_text = None
+        self.on_logout_requested = None  # callback to be set by parent window
         self.init_ui()
     
     def init_ui(self):
@@ -94,12 +96,24 @@ class HeaderBar(QWidget):
         layout.setContentsMargins(20, 8, 20, 8)  # REDUCED from 15 to 8
         
         # User info on left
-        user_info = QLabel(f"👤 {self.user_name} ({self.employee_id}) [{self.role.upper()}]")
-        user_info.setStyleSheet("font-size: 13px; color: #fff;")  # REDUCED from 14px
-        layout.addWidget(user_info)
+        self.user_info = QLabel(f"👤 {self.user_name} ({self.employee_id}) [{self.role.upper()}]")
+        self.user_info.setStyleSheet("font-size: 13px; color: #fff;")  # REDUCED from 14px
+        layout.addWidget(self.user_info)
+        
+        # Admin id label (hidden until set)
+        self.admin_label = QLabel("")
+        self.admin_label.setStyleSheet("font-size: 12px; color: #bbb; margin-left: 12px;")
+        layout.addWidget(self.admin_label)
         
         # Spacer
         layout.addStretch()
+        
+        # Logout button
+        logout_btn = QPushButton("Logout")
+        logout_btn.setFixedHeight(28)
+        logout_btn.setStyleSheet("QPushButton { background-color: #d9534f; color: #fff; border: none; padding: 6px 12px; border-radius: 4px; } QPushButton:hover { background-color: #c9302c; }")
+        logout_btn.clicked.connect(self._handle_logout)
+        layout.addWidget(logout_btn)
         
         # Company name on right - FIXED with word wrap
         company_name = QLabel("Actoan")
@@ -111,6 +125,17 @@ class HeaderBar(QWidget):
         self.setLayout(layout)
         self.setStyleSheet("background-color: #1e1e1e; border-bottom: 1px solid #3d3d3d;")  # REDUCED border
         self.setFixedHeight(40)  # FIXED height to prevent expansion
+    
+    def _handle_logout(self):
+        if callable(self.on_logout_requested):
+            self.on_logout_requested()
+    
+    def set_admin_id(self, admin_employee_id: str):
+        """Show admin employee ID (creator of this user)"""
+        if admin_employee_id:
+            self.admin_label.setText(f"Admin: {admin_employee_id}")
+        else:
+            self.admin_label.setText("")
 
 
 class CameraListWidget(QWidget):
@@ -581,6 +606,11 @@ class CameraTestMainWindow(QMainWindow):
     
     def init_ui(self):
         self.header_bar = HeaderBar(self.employee_name, self.employee_id, self.role)
+        # Wire logout
+        def do_logout():
+            if hasattr(self, '_parent_app') and self._parent_app:
+                self._parent_app.logout()
+        self.header_bar.on_logout_requested = do_logout
         
         main_widget = QWidget()
         main_layout = QVBoxLayout()
@@ -643,3 +673,8 @@ class CameraTestMainWindow(QMainWindow):
         
         self.main_content_panel.rtsp_url_input.setText(f"rtsp://{ip}/main")
         self.main_content_panel.update_camera_status(clean_serial, "connected")
+
+    def set_admin_id(self, admin_employee_id: str):
+        """Expose setter to update header with admin id"""
+        if hasattr(self, 'header_bar') and self.header_bar:
+            self.header_bar.set_admin_id(admin_employee_id)

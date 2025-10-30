@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class LoginWindow(QWidget):
     """Professional login window with clean layout"""
     
-    login_successful = pyqtSignal(str, str, str)  # employee_id, name, role
+    login_successful = pyqtSignal(str, str, str, str)  # employee_id, name, role, password (optional)
     
     def __init__(self):
         super().__init__()
@@ -75,8 +75,28 @@ class LoginWindow(QWidget):
         self.name_input.returnPressed.connect(self.handle_login)
         layout.addWidget(self.name_input)
         
+        # ===== PASSWORD =====
+        password_label = QLabel("Password:")
+        password_label.setStyleSheet("font-size: 13px; font-weight: 600; color: #333; margin-top: 20px; margin-bottom: 8px;")
+        layout.addWidget(password_label)
+        
+        self.password_input = QLineEdit()
+        self.password_input.setPlaceholderText("Enter password (for Admin) or leave blank (for User)")
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password_input.setFixedHeight(48)
+        self.password_input.returnPressed.connect(self.handle_login)
+        layout.addWidget(self.password_input)
+        
+        # Help text
+        help_text = QLabel("Note: For Users, password is automatically Employee ID + Name")
+        help_text.setStyleSheet("color: #666; font-size: 11px; margin-top: 5px; margin-bottom: 20px;")
+        layout.addWidget(help_text)
+        
+        # Connect role change to update password placeholder
+        self.role_combo.currentTextChanged.connect(self.on_role_changed)
+        
         # ===== SPACER =====
-        layout.addSpacing(30)
+        layout.addSpacing(20)
         
         # ===== LOGIN BUTTON =====
         self.login_btn = QPushButton("Login")
@@ -179,11 +199,22 @@ class LoginWindow(QWidget):
             }
         """)
     
+    def on_role_changed(self, role_text: str):
+        """Update password field based on role"""
+        if role_text.lower() == "admin":
+            self.password_input.setPlaceholderText("Enter password (required for Admin)")
+            self.password_input.setEnabled(True)
+        else:
+            self.password_input.setPlaceholderText("Leave blank - auto-generated from ID + Name")
+            self.password_input.setText("")
+            self.password_input.setEnabled(False)
+    
     def handle_login(self):
-        """Handle login submission"""
+        """Handle login submission - now with database verification"""
         employee_id = self.employee_id_input.text().strip()
         name = self.name_input.text().strip()
         role = self.role_combo.currentText().lower()
+        password = self.password_input.text().strip() if self.password_input.isEnabled() else None
         
         # Validation
         if not employee_id:
@@ -196,12 +227,14 @@ class LoginWindow(QWidget):
             self.name_input.setFocus()
             return
         
-        # Success
-        logger.info(f"Login: {employee_id} ({name}) as {role}")
-        self.login_successful.emit(employee_id, name, role)
+        if role == "admin" and not password:
+            self.show_error("Password is required for Admin login")
+            self.password_input.setFocus()
+            return
         
-        # Note: The success dialog will be replaced by navigation to main window
-        # This emit will trigger on_login_success in app.py
+        # Emit signal - app.py will handle database authentication
+        logger.info(f"Login attempt: {employee_id} ({name}) as {role}")
+        self.login_successful.emit(employee_id, name, role, password)
         
     def show_error(self, message: str):
         """Show error dialog"""
