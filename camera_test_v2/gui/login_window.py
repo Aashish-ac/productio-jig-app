@@ -215,24 +215,26 @@ class LoginWindow(QWidget):
         name = self.name_input.text().strip()
         role = self.role_combo.currentText().lower()
         password = self.password_input.text().strip() if self.password_input.isEnabled() else None
-        
+
         # Validation
         if not employee_id:
             self.show_error("Please enter Employee ID")
             self.employee_id_input.setFocus()
             return
-        
+
         if not name:
             self.show_error("Please enter Full Name")
             self.name_input.setFocus()
             return
-        
-        if role == "admin" and not password:
-            self.show_error("Password is required for Admin login")
-            self.password_input.setFocus()
-            return
-        
-        # Emit signal - app.py will handle database authentication
+
+        if role == "admin":
+            if not password:
+                self.show_error("Please set your password (new or existing admin)")
+                self.password_input.setFocus()
+                return
+            # Additional: Defer smart creation/existing logic to app.py or parent (password required for both cases)
+
+        # Emit signal - app.py will handle smart admin creation/check
         logger.info(f"Login attempt: {employee_id} ({name}) as {role}")
         self.login_successful.emit(employee_id, name, role, password)
         

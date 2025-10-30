@@ -147,22 +147,68 @@ class CameraTestApp:
         self.login_window.show()
         logger.info("✓ Login window displayed")
     
-    def on_login_attempt(self, employee_id: str, employee_name: str, role: str, password: str):
-        """Handle login attempt - verify with database (synchronous)"""
+    def on_login_attempt(self, employee_id: str, employee_name: str, role: str, password: Optional[str] = None):
+        """Smart login: for admin, allow new admin creation or login; for user, same as before"""
         if not self.database:
-            QMessageBox.critical(
-                self.login_window,
-                "Database Error",
-                "Database not available. Cannot verify credentials."
-            )
-            logger.error("Login failed: Database not available")
+            self.login_window.show_error("Database not available.")
             return
-        
-        # Handle empty password string
-        password_arg = password if password else None
-        
-        # Call authentication directly - synchronous now
-        self._authenticate_and_login(employee_id, employee_name, role, password_arg)
+        if role == "admin":
+            existing_admin = self.database.get_user_by_id(employee_id)
+            from PyQt6.QtWidgets import QMessageBox
+            if existing_admin is None:
+                # Create new admin with provided fields (no prior password check)
+                if not employee_id or not employee_name or not password:
+                    self.login_window.show_error("All fields are required for new admin registration.")
+                    return
+                create_result = self.database.create_user(
+                    employee_id=employee_id,
+                    name=employee_name,
+                    password=password,
+                    role="admin",
+                    admin_id=None
+                )
+                if not create_result:
+                    self.login_window.show_error("Admin creation failed. Employee ID may already exist.")
+                    return
+                self.current_user = {
+                    'id': create_result.id,
+                    'employee_id': create_result.employee_id,
+                    'name': create_result.name,
+                    'role': create_result.role,
+                }
+                self.current_role = "admin"
+                self.on_login_success(employee_id, employee_name, role)
+                return
+            else:
+                # Admin exists: name must match
+                if existing_admin.name.strip().lower() != employee_name.strip().lower():
+                    self.login_window.show_error("Admin with this ID already exists. Please enter the correct name.")
+                    return
+                # Name matches, check password
+                import bcrypt
+                if not password or not bcrypt.checkpw(password.encode('utf-8'), existing_admin.password_hash.encode('utf-8')):
+                    self.login_window.show_error("Incorrect password for admin account.")
+                    return
+                # Success
+                self.current_user = {
+                    'id': existing_admin.id,
+                    'employee_id': existing_admin.employee_id,
+                    'name': existing_admin.name,
+                    'role': existing_admin.role,
+                }
+                self.current_role = "admin"
+                self.on_login_success(employee_id, employee_name, role)
+                return
+        else:
+            # User path (unchanged)
+            auth = self.database.authenticate_user(employee_id, employee_name)
+            if not auth:
+                self.login_window.show_error("Login failed. Check your credentials.")
+                return
+            self.current_user = auth
+            self.current_role = auth["role"]
+            self.on_login_success(employee_id, employee_name, role)
+            return
     
     def _authenticate_and_login(self, employee_id: str, employee_name: str, role: str, password: Optional[str]):
         """Authenticate user with database and proceed with login (synchronous)"""
@@ -254,14 +300,13 @@ class CameraTestApp:
         """Handle successful login - show appropriate dashboard"""
         logger.info(f"Login successful: {employee_name} ({employee_id}) as {role}")
         
-        # Show admin dashboard for admin, regular interface for users
         if role == "admin":
             # Create admin dashboard
             self.admin_window = AdminDashboard(
                 employee_id, 
                 employee_name,
                 database=self.database,
-                parent_app=self
+                parent_app=self  # Ensure dashboard never loses parent/app
             )
             self.admin_window.show()
             logger.info("✓ Admin dashboard displayed")
@@ -272,30 +317,24 @@ class CameraTestApp:
                 employee_name,
                 role
             )
-            
-            # Pass telnet pool and websocket manager
             self.main_window.telnet_pool = self.telnet_pool
             self.main_window.websocket_manager = self.websocket_manager
             self.main_window._parent_app = self
-            
             # If we have admin employee id, show it on UI
             admin_emp_id = None
             if self.current_user:
                 admin_emp_id = self.current_user.get('admin_employee_id')
             if admin_emp_id and hasattr(self.main_window, 'set_admin_id'):
                 self.main_window.set_admin_id(admin_emp_id)
-            
-            # Connect test buttons (Phase 3)
             self.connect_test_buttons()
-            
-            # Show main window
             self.main_window.show()
             logger.info("✓ Main window displayed")
-        
-        # Now close login window (dashboard/main window is already visible)
+        # Now close login window (do not immediately set to None)
         if self.login_window:
             self.login_window.close()
-            self.login_window = None
+            # Defer deletion/remove ref after a small delay to avoid segfault race with Qt event loop.
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(500, lambda: setattr(self, 'login_window', None))
     
     def connect_test_buttons(self):
         """Connect test button signals - STORE LOOP REFERENCE"""

@@ -13,62 +13,60 @@ sys.path.insert(0, str(Path(__file__).parent))
 from database.models import Database
 from core.config import Config
 
-def create_admin():
-    """Create initial admin account (synchronous)"""
+def main():
+    """Create or login admin account (smart unified flow)"""
     config = Config()
-    
-    # Initialize database
     db = Database(
         db_host=config.DB_HOST,
         db_port=config.DB_PORT,
         db_name=config.DB_NAME,
         db_user=config.DB_USER,
-        db_password=config.DB_PASSWORD
+        db_password=config.DB_PASSWORD,
     )
-    
-    # Initialize tables (synchronous)
     db.initialize()
-    
-    # Get admin details
-    print("=" * 60)
-    print("Create Initial Admin Account")
-    print("=" * 60)
-    
-    name = input("Enter Admin Full Name: ").strip()
-    password = getpass("Enter Admin Password: ").strip()
-    
-    if not name or not password:
-        print("Error: Name and password are required")
+
+    print("\n==== Admin CLI (Create or Login) ====")
+
+    employee_id = input("Employee ID: ").strip()
+    user = db.get_user_by_id(employee_id)
+    if user and user.role == 'admin':
+        # Admin account exists
+        name_input = input("Name: ").strip()
+        if user.name.strip().lower() != name_input.lower():
+            print(f"Admin with ID {employee_id} already exists, but name does not match.\nPlease enter the correct name or choose a different ID.")
+            db.close()
+            return
+        # Name matches, check password
+        password = getpass("Password: ").strip()
+        from database.models import bcrypt
+        if bcrypt.checkpw(password.encode('utf-8'), user.password_hash.encode('utf-8')):
+            print(f"Authenticated! Welcome back, {user.name} (ID: {employee_id})")
+        else:
+            print("Password incorrect. Access denied.")
         db.close()
         return
-    
-    # Generate admin ID (synchronous)
-    admin_id = db.generate_next_employee_id("ADM")
-    
-    # Create admin user (synchronous)
-    admin_user = db.create_user(
-        employee_id=admin_id,
-        name=name,
-        password=password,
-        role="admin",
-        admin_id=None  # Admins don't have an admin_id
-    )
-    
-    if admin_user:
-        print("\n" + "=" * 60)
-        print("✓ Admin Account Created Successfully!")
-        print("=" * 60)
-        print(f"Employee ID: {admin_id}")
-        print(f"Name: {name}")
-        print(f"Password: {password}")
-        print("\nUse these credentials to login as Admin.")
-        print("=" * 60)
     else:
-        print("\n✗ Failed to create admin account")
-        print("(User might already exist)")
-    
-    db.close()
+        # New admin registration
+        name = input("Name: ").strip()
+        password = getpass("Set Password: ").strip()
+        if not employee_id or not name or not password:
+            print("All fields (ID, name, password) are required. Aborting.")
+            db.close()
+            return
+        admin_id = employee_id  # Use provided ID directly
+        admin_user = db.create_user(
+            employee_id=admin_id,
+            name=name,
+            password=password,
+            role='admin',
+            admin_id=None
+        )
+        if admin_user:
+            print(f"Created admin: {admin_user.name} (ID: {admin_user.employee_id})")
+        else:
+            print("Failed to create admin (ID may already exist or DB error).")
+        db.close()
 
 if __name__ == "__main__":
-    create_admin()
+    main()
 

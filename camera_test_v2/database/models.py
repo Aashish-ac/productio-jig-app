@@ -48,6 +48,11 @@ class Camera(Base):
     status = mapped_column(String(20), default="unknown")  # 'connected', 'disconnected', 'testing'
     last_seen = mapped_column(DateTime)
     created_at = mapped_column(DateTime, default=datetime.now)
+    # --- Future-proof fields ---
+    last_known_stage = mapped_column(String(10), nullable=True)
+    last_known_serial = mapped_column(String(50), nullable=True)
+    last_tested_by = mapped_column(Integer, nullable=True)  # FK to User.id or just employee_id
+    last_tested_at = mapped_column(DateTime, nullable=True)
     
     # Relationships
     test_results = relationship("TestResult", back_populates="camera")
@@ -75,6 +80,13 @@ class TestResult(Base):
     overall_status = mapped_column(String(10), nullable=False)  # 'PASS', 'FAIL'
     notes = mapped_column(Text)
     test_date = mapped_column(DateTime, default=datetime.now)
+    # --- Future-proof fields ---
+    test_stage = mapped_column(String(10), nullable=True)  # 'T1', 'L1', 'L2' etc
+    camera_stage_before_test = mapped_column(String(10), nullable=True)
+    camera_stage_after_test = mapped_column(String(10), nullable=True)
+    serial_confirmed = mapped_column(Boolean, nullable=True)  # True if camera S/N matched against DB
+    serial_received_from_camera = mapped_column(String(50), nullable=True)
+    stage_confirmed_by_tool = mapped_column(Boolean, nullable=True)  # Did tool confirm stage before test?
     
     # Relationships
     user = relationship("User", back_populates="test_results")
