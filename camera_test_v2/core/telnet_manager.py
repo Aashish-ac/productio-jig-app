@@ -80,19 +80,32 @@ class CameraSession:
                                f"after {delay}s delay")
                     await asyncio.sleep(delay)
                 
-                # Validate IP with ping first
-                from .network_utils import ping_ip
-                
-                if attempt == 1:  # Only ping on first attempt
+                # Validate IP with ping first (first attempt only)
+                if attempt == 1:
                     logger.debug(f"[{self.serial}] Validating IP: {self.ip}")
-                    ping_result = await ping_ip(self.ip, timeout=3)
+                    
+                    # Use async ping with run_in_executor to preserve event loop context
+                    from .network_utils import ping_ip_sync
+                    
+                    # Run ping in thread executor to keep event loop context
+                    loop = asyncio.get_running_loop()
+                    ping_result = await loop.run_in_executor(
+                        None,  # Use default executor
+                        ping_ip_sync,
+                        self.ip,
+                        3  # timeout
+                    )
+                    
                     if not ping_result:
                         self.last_error = f"Camera not responding at {self.ip} (ping failed)"
                         logger.error(f"[{self.serial}] {self.last_error}")
                         break  # Don't retry if ping fails
+                    
+                    logger.debug(f"[{self.serial}] Ping successful, connecting to telnet...")
                 
-                # Open Telnet connection
+                # Open Telnet connection (this will work fine - event loop is still there)
                 logger.debug(f"[{self.serial}] Connecting to {self.ip}:{self.port}")
+                
                 self.reader, self.writer = await asyncio.wait_for(
                     telnetlib3.open_connection(self.ip, self.port),
                     timeout=timeout

@@ -20,7 +20,7 @@ from gui.login_window import LoginWindow
 from gui.main_window import CameraTestMainWindow
 from gui.admin_dashboard import AdminDashboard
 from core.telnet_manager import TelnetConnectionPool
-from core.websocket_manager import WebSocketManager
+from core.tcp_listener import TCPListener
 from database.models import Database
 from core.config import Config
 
@@ -38,7 +38,7 @@ class CameraTestApp:
     def __init__(self):
         self.config = Config()
         self.telnet_pool = TelnetConnectionPool(max_connections=50)
-        self.websocket_manager = WebSocketManager()
+        self.tcp_listener = TCPListener()
         self.database = None  # Will be initialized if PostgreSQL is available
         self.main_window = None
         self.login_window = None  # Store login window reference
@@ -99,8 +99,8 @@ class CameraTestApp:
         self.telnet_pool.register_callback('on_disconnect', on_camera_disconnected)
         self.telnet_pool.register_callback('on_error', on_camera_error)
     
-    def setup_websocket_callbacks(self):
-        """Setup WebSocket callbacks for PCB ready status"""
+    def setup_tcp_callbacks(self):
+        """Setup TCP listener callbacks for PCB ready status"""
         
         async def on_pcb_ready(message, timestamp):
             logger.info(f"✓ PCB is ready: {message} at {timestamp}")
@@ -108,7 +108,7 @@ class CameraTestApp:
                 # Enable test buttons when PCB is ready
                 self.enable_test_buttons()
         
-        self.websocket_manager.register_callback(on_pcb_ready)
+        self.tcp_listener.register_callback(on_pcb_ready)
     
     def enable_test_buttons(self):
         """Enable test buttons when PCB is ready"""
@@ -318,7 +318,7 @@ class CameraTestApp:
                 role
             )
             self.main_window.telnet_pool = self.telnet_pool
-            self.main_window.websocket_manager = self.websocket_manager
+            self.main_window.tcp_listener = self.tcp_listener
             self.main_window._parent_app = self
             # If we have admin employee id, show it on UI
             admin_emp_id = None
@@ -519,7 +519,7 @@ class CameraTestApp:
         # Find or add row
         row = -1
         for i in range(table.rowCount()):
-            test_item = table.item(i, 1)  # Test column is now index 1
+            test_item = table.item(i, 2)  # Test column is now index 2 (after Date, Time)
             if test_item and test_item.text() == test_name:
                 row = i
                 break
@@ -528,31 +528,44 @@ class CameraTestApp:
             row = table.rowCount()
             table.insertRow(row)
         
+        # Get timezone-aware datetime (local timezone)
+        from datetime import timezone as dt_timezone
+        now = datetime.now(dt_timezone.utc).astimezone()  # Convert to local timezone
+        
         # Populate all columns
-        # Column 0: Time
-        time_str = datetime.now().strftime("%H:%M:%S")
-        table.setItem(row, 0, QTableWidgetItem(time_str))
+        # Column 0: Date (timezone-aware)
+        date_str = now.strftime("%Y-%m-%d")
+        table.setItem(row, 0, QTableWidgetItem(date_str))
         
-        # Column 1: Test
-        table.setItem(row, 1, QTableWidgetItem(test_name))
+        # Column 1: Time (timezone-aware)
+        time_str = now.strftime("%H:%M:%S")
+        table.setItem(row, 1, QTableWidgetItem(time_str))
         
-        # Column 2: Command (truncate to 80 chars for display)
+        # Column 2: Test
+        table.setItem(row, 2, QTableWidgetItem(test_name))
+        
+        # Column 3: Command (truncate to 80 chars for display)
         command_display = command[:80] + "..." if len(command) > 80 else command
-        table.setItem(row, 2, QTableWidgetItem(command_display))
+        table.setItem(row, 3, QTableWidgetItem(command_display))
         
-        # Column 3: Status (with color coding)
-        status_display = "🟢 PASS" if status == "PASS" else "🔴 FAIL"
+        # Column 4: Status (initially empty - only updated when user clicks checkbox)
+        # Don't set status automatically - wait for user checkbox click
+        status_display = ""  # Empty initially
         status_item = QTableWidgetItem(status_display)
-        status_item.setForeground(QColor("#4caf50" if status == "PASS" else "#d32f2f"))
-        table.setItem(row, 3, status_item)
+        table.setItem(row, 4, status_item)
         
-        # Column 4: Output (truncate to 80 chars)
+        # Column 5: Output (truncate to 80 chars)
         output_display = (output[:80] + "..." if len(output) > 80 else output) if output else ""
-        table.setItem(row, 4, QTableWidgetItem(output_display))
+        table.setItem(row, 5, QTableWidgetItem(output_display))
         
-        # Column 5: Operator
-        operator = self.current_user or "Unknown"
-        table.setItem(row, 5, QTableWidgetItem(operator))
+        # Column 6: Operator
+        operator_name = "Unknown"
+        if self.current_user:
+            if isinstance(self.current_user, dict):
+                operator_name = self.current_user.get('name') or self.current_user.get('employee_id', 'Unknown')
+            else:
+                operator_name = str(self.current_user)
+        table.setItem(row, 6, QTableWidgetItem(operator_name))
         
         # Auto-resize columns for better visibility
         table.resizeColumnsToContents()
@@ -646,17 +659,26 @@ class CameraTestApp:
                 
             test_name = test_item.text()
             
-            # Check corresponding checkbox in test panel
-            checkbox = panel.test_checkboxes.get(test_name)
-            if checkbox and checkbox.isChecked():
-                # Collect all data from this row
-                time_item = table.item(row, 0)
-                command_item = table.item(row, 2)
-                status_item = table.item(row, 3)
-                output_item = table.item(row, 4)
-                operator_item = table.item(row, 5)
+            # Check corresponding checkbox in test panel (new structure with pass/fail)
+            checkbox_dict = panel.test_checkboxes.get(test_name)
+            # Check if either pass or fail checkbox is checked
+            is_checked = False
+            if checkbox_dict and isinstance(checkbox_dict, dict):
+                pass_cb = checkbox_dict.get("pass")
+                fail_cb = checkbox_dict.get("fail")
+                is_checked = (pass_cb and pass_cb.isChecked()) or (fail_cb and fail_cb.isChecked())
+            
+            if is_checked:
+                # Collect all data from this row (adjusted column indices for Date column)
+                date_item = table.item(row, 0)
+                time_item = table.item(row, 1)
+                command_item = table.item(row, 3)
+                status_item = table.item(row, 4)
+                output_item = table.item(row, 5)
+                operator_item = table.item(row, 6)
                 
                 results[test_name] = {
+                    "date": date_item.text() if date_item else "",
                     "time": time_item.text() if time_item else "",
                     "command": command_item.text() if command_item else "",
                     "status": status_item.text() if status_item else "",
@@ -673,8 +695,8 @@ class CameraTestApp:
         if self.telnet_pool:
             await self.telnet_pool.close_all()
         
-        if self.websocket_manager:
-            await self.websocket_manager.disconnect()
+        if self.tcp_listener:
+            await self.tcp_listener.disconnect()
         
         if self.database:
             self.database.close()  # Synchronous now
@@ -705,12 +727,15 @@ def main():
     def cleanup():
         logger.info("Cleaning up resources...")
         try:
-            if camera_app.telnet_pool:
-                loop.run_until_complete(camera_app.telnet_pool.close_all())
-            if camera_app.websocket_manager:
-                loop.run_until_complete(camera_app.websocket_manager.disconnect())
-            if camera_app.database:
-                camera_app.database.close()  # Synchronous now
+            # If the event loop is running, schedule async cleanup without blocking
+            try:
+                loop_running = loop.is_running()
+            except Exception:
+                loop_running = False
+            if loop_running:
+                asyncio.create_task(camera_app.cleanup())
+            else:
+                loop.run_until_complete(camera_app.cleanup())
             logger.info("✓ Cleanup complete")
         except Exception as e:
             logger.error(f"Cleanup error: {e}")
@@ -725,7 +750,7 @@ def main():
     try:
         camera_app.initialize_database()  # Synchronous
         camera_app.setup_telnet_callbacks()
-        camera_app.setup_websocket_callbacks()
+        camera_app.setup_tcp_callbacks()
         
         # Disable test buttons initially (waiting for PCB ready)
         camera_app.disable_test_buttons()
@@ -760,10 +785,14 @@ def main():
     
     app.lastWindowClosed.connect(on_last_window_closed)
     
-    # Run Qt event loop - USE app.exec() not loop.run_forever()
+    # Run Qt event loop with qasync properly integrated
+    # Use loop.run_forever() which internally calls app.exec() and sets the loop as running
     with loop:
         try:
-            sys.exit(app.exec())
+            # loop.run_forever() starts the asyncio loop and runs app.exec() internally
+            # This ensures asyncio.get_running_loop() works in signal handlers
+            exit_code = loop.run_forever()
+            sys.exit(exit_code)
         except KeyboardInterrupt:
             logger.info("Application interrupted by user")
             cleanup()

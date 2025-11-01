@@ -39,7 +39,21 @@ def ping_ip_sync(ip: str, timeout: int = 3) -> bool:
             logger.info(f"✓ Ping successful: {ip}")
             return True
         else:
-            logger.warning(f"✗ Ping failed: {ip} (return code: {result.returncode})")
+            # Log the actual error message from ping
+            error_msg = result.stderr.decode('utf-8', errors='ignore').strip() if result.stderr else ""
+            stdout_msg = result.stdout.decode('utf-8', errors='ignore').strip() if result.stdout else ""
+            
+            if error_msg:
+                logger.warning(f"✗ Ping failed: {ip} (return code: {result.returncode}) - {error_msg}")
+            elif stdout_msg:
+                logger.warning(f"✗ Ping failed: {ip} (return code: {result.returncode}) - {stdout_msg}")
+            else:
+                # Common return codes and their meanings
+                error_meaning = {
+                    1: "no response received",
+                    2: "no route to host or network unreachable"
+                }.get(result.returncode, "unknown error")
+                logger.warning(f"✗ Ping failed: {ip} (return code: {result.returncode}, {error_meaning})")
             return False
             
     except FileNotFoundError:
@@ -57,6 +71,9 @@ async def ping_ip(ip: str, timeout: int = 3) -> bool:
     """
     Ping IP address to verify network connectivity
     
+    Uses run_in_executor to run the sync ping in a thread pool, which is safer
+    with qasync event loop and avoids subprocess event loop issues.
+    
     Args:
         ip: IP address to ping
         timeout: Timeout in seconds
@@ -66,52 +83,21 @@ async def ping_ip(ip: str, timeout: int = 3) -> bool:
     """
     # Check if we have a running event loop
     try:
-        asyncio.get_running_loop()
+        loop = asyncio.get_running_loop()
     except RuntimeError:
-        # No running loop, use sync version
+        # No running loop, use sync version directly
         logger.debug("No running event loop, using sync ping")
         return ping_ip_sync(ip, timeout)
     
     try:
-        # Determine ping command based on OS
-        if platform.system().lower() == "windows":
-            cmd = ["ping", "-n", "1", "-w", str(timeout * 1000), ip]
-        else:
-            # Linux/Mac
-            cmd = ["ping", "-c", "1", "-W", str(timeout), ip]
-        
-        # Execute ping with timeout
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
-        try:
-            await asyncio.wait_for(process.communicate(), timeout=timeout)
-            
-            # Check return code (0 means success)
-            if process.returncode == 0:
-                logger.info(f"✓ Ping successful: {ip}")
-                return True
-            else:
-                logger.warning(f"✗ Ping failed: {ip} (return code: {process.returncode})")
-                return False
-                
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            logger.warning(f"✗ Ping timeout: {ip}")
-            return False
-            
-    except FileNotFoundError:
-        # Ping command not available, skip validation
-        logger.warning(f"Ping command not available, skipping validation for {ip}")
-        return True  # Assume success if ping not available
-        
+        # Use run_in_executor with None (default thread pool) to run sync ping
+        # This preserves the event loop context better than to_thread for qasync
+        result = await loop.run_in_executor(None, ping_ip_sync, ip, timeout)
+        return result
     except Exception as e:
         logger.error(f"Ping error for {ip}: {e}")
-        return False
+        # Fall back to sync if executor fails
+        return ping_ip_sync(ip, timeout)
 
 
 async def validate_camera_ip(ip: str, port: int = 23) -> tuple[bool, str]:

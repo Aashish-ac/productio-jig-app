@@ -6,7 +6,8 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QListWidget, QPushButton, QFrame,
     QTableWidget, QTableWidgetItem, QHeaderView,
-    QTextEdit, QLineEdit, QSplitter, QScrollArea, QCheckBox, QGridLayout
+    QTextEdit, QLineEdit, QSplitter, QScrollArea, QCheckBox, QGridLayout,
+    QSizePolicy  # Added for table sizing
 )
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QPointF
 from PyQt6.QtGui import QFont, QColor, QPainter, QPen, QPainterPath
@@ -423,14 +424,22 @@ class MainContentPanel(QWidget):
         self.led_pass_checkbox.setStyleSheet(checkbox_style)
         grid_layout.addWidget(self.led_pass_checkbox, 0, 1)
         
+        self.led_fail_checkbox = CheckBoxWithTick("✗ Fail")
+        self.led_fail_checkbox.setStyleSheet(checkbox_style)
+        grid_layout.addWidget(self.led_fail_checkbox, 0, 2)
+        
         self.irled_btn = QPushButton("🔴 IRLED Test")
         self.irled_btn.setMinimumSize(130, 38)  # REDUCED
         self.irled_btn.setStyleSheet(self.get_button_style("#4caf50"))
-        grid_layout.addWidget(self.irled_btn, 0, 2)
+        grid_layout.addWidget(self.irled_btn, 0, 3)
         
         self.irled_pass_checkbox = CheckBoxWithTick("✓ Pass")
         self.irled_pass_checkbox.setStyleSheet(checkbox_style)
-        grid_layout.addWidget(self.irled_pass_checkbox, 0, 3)
+        grid_layout.addWidget(self.irled_pass_checkbox, 0, 4)
+        
+        self.irled_fail_checkbox = CheckBoxWithTick("✗ Fail")
+        self.irled_fail_checkbox.setStyleSheet(checkbox_style)
+        grid_layout.addWidget(self.irled_fail_checkbox, 0, 5)
         
         # Row 2
         self.ircut_btn = QPushButton("🔄 IRCUT Test")
@@ -442,14 +451,22 @@ class MainContentPanel(QWidget):
         self.ircut_pass_checkbox.setStyleSheet(checkbox_style)
         grid_layout.addWidget(self.ircut_pass_checkbox, 1, 1)
         
+        self.ircut_fail_checkbox = CheckBoxWithTick("✗ Fail")
+        self.ircut_fail_checkbox.setStyleSheet(checkbox_style)
+        grid_layout.addWidget(self.ircut_fail_checkbox, 1, 2)
+        
         self.speaker_btn = QPushButton("🔊 Speaker Test")
         self.speaker_btn.setMinimumSize(130, 38)  # REDUCED
         self.speaker_btn.setStyleSheet(self.get_button_style("#4caf50"))
-        grid_layout.addWidget(self.speaker_btn, 1, 2)
+        grid_layout.addWidget(self.speaker_btn, 1, 3)
         
         self.speaker_pass_checkbox = CheckBoxWithTick("✓ Pass")
         self.speaker_pass_checkbox.setStyleSheet(checkbox_style)
-        grid_layout.addWidget(self.speaker_pass_checkbox, 1, 3)
+        grid_layout.addWidget(self.speaker_pass_checkbox, 1, 4)
+        
+        self.speaker_fail_checkbox = CheckBoxWithTick("✗ Fail")
+        self.speaker_fail_checkbox.setStyleSheet(checkbox_style)
+        grid_layout.addWidget(self.speaker_fail_checkbox, 1, 5)
         
         frame_layout.addLayout(grid_layout)
         
@@ -458,68 +475,192 @@ class MainContentPanel(QWidget):
         self.camera_status_label.setStyleSheet("color: #a8a8a8; font-size: 12px; margin-top: 6px;")  # REDUCED
         frame_layout.addWidget(self.camera_status_label)
         
+        # Store both pass and fail checkboxes for each test
         self.test_checkboxes = {
-            "led_test": self.led_pass_checkbox,
-            "irled_test": self.irled_pass_checkbox,
-            "ircut_test": self.ircut_pass_checkbox,
-            "speaker_test": self.speaker_pass_checkbox
+            "led_test": {
+                "pass": self.led_pass_checkbox,
+                "fail": self.led_fail_checkbox
+            },
+            "irled_test": {
+                "pass": self.irled_pass_checkbox,
+                "fail": self.irled_fail_checkbox
+            },
+            "ircut_test": {
+                "pass": self.ircut_pass_checkbox,
+                "fail": self.ircut_fail_checkbox
+            },
+            "speaker_test": {
+                "pass": self.speaker_pass_checkbox,
+                "fail": self.speaker_fail_checkbox
+            }
         }
+        
+        # Connect checkbox signals to update status when clicked
+        for test_name, checkboxes in self.test_checkboxes.items():
+            def make_handler(test, pass_cb, fail_cb):
+                def on_pass_clicked(checked):
+                    if checked:
+                        fail_cb.setChecked(False)
+                        # Update table status based on checkbox
+                        self._update_table_status_from_checkbox(test, "PASS")
+                def on_fail_clicked(checked):
+                    if checked:
+                        pass_cb.setChecked(False)
+                        # Update table status based on checkbox
+                        self._update_table_status_from_checkbox(test, "FAIL")
+                pass_cb.stateChanged.connect(on_pass_clicked)
+                fail_cb.stateChanged.connect(on_fail_clicked)
+            # Just call make_handler - it connects the signals, no need to call result
+            make_handler(test_name, checkboxes["pass"], checkboxes["fail"])
         
         frame.setLayout(frame_layout)
         parent_layout.addWidget(frame)
     
     def create_results_panel(self, parent_layout):
-        """Create scrollable results table - COMPACT"""
+        """Create scrollable results table with FIXED sizing and VISIBLE headers"""
         frame = QFrame()
-        frame.setStyleSheet("background-color: #252526; border-radius: 6px; padding: 10px;")  # REDUCED from 15px
+        frame.setStyleSheet("background-color: #252526; border-radius: 6px; padding: 10px;")
+        frame.setMinimumHeight(400)  # ✅ FIX: Ensure frame has minimum height
+        
         frame_layout = QVBoxLayout()
-        frame_layout.setSpacing(8)  # REDUCED from 12
+        frame_layout.setSpacing(8)
+        frame_layout.setContentsMargins(10, 10, 10, 10)
         
         # Header
         header_layout = QHBoxLayout()
         title = QLabel("📊 Test Results")
-        title.setStyleSheet("font-size: 15px; font-weight: bold; color: #0078d4;")  # REDUCED from 16px
+        title.setStyleSheet("font-size: 15px; font-weight: bold; color: #0078d4;")
+        title.setFixedHeight(35)
         header_layout.addWidget(title)
         header_layout.addStretch()
         
         self.clear_btn = QPushButton("🗑️ Clear")
         self.clear_btn.setStyleSheet(self.get_button_style("#666"))
-        self.clear_btn.setMinimumWidth(90)  # REDUCED from 100
+        self.clear_btn.setMinimumWidth(90)
         self.clear_btn.setFixedHeight(32)
         header_layout.addWidget(self.clear_btn)
         
         self.save_btn = QPushButton("💾 Save Checked Results")
         self.save_btn.setStyleSheet(self.get_button_style("#0078d4"))
-        self.save_btn.setMinimumWidth(170)  # REDUCED from 180
+        self.save_btn.setMinimumWidth(170)
         self.save_btn.setFixedHeight(32)
         header_layout.addWidget(self.save_btn)
         
         frame_layout.addLayout(header_layout)
         
-        # Results table with proper sizing
-        self.results_table = QTableWidget()
-        self.results_table.setColumnCount(6)
+        # ✅ FIX: Create table with EXPLICIT sizing
+        self.results_table = QTableWidget(0, 7)  # 0 rows, 7 columns initially
+        
+        # ✅ FIX: Set headers
         self.results_table.setHorizontalHeaderLabels([
-            "Time", "Test", "Command", "Status", "Output", "Operator"
+            "Date", "Time", "Test", "Command", "Status", "Output", "Operator"
         ])
-        self.results_table.setStyleSheet(self.get_table_style())
-        self.results_table.setMinimumHeight(250)  # REDUCED from 280
-        self.results_table.setMaximumHeight(400)  # REDUCED from 450
         
-        # Column widths
-        self.results_table.setColumnWidth(0, 80)
-        self.results_table.setColumnWidth(1, 100)
-        self.results_table.setColumnWidth(2, 200)
-        self.results_table.setColumnWidth(3, 100)
-        self.results_table.setColumnWidth(4, 250)
-        self.results_table.setColumnWidth(5, 100)
+        # ✅ FIX: Configure horizontal header with FORCED visibility
+        h_header = self.results_table.horizontalHeader()
+        h_header.setVisible(True)
+        h_header.setFixedHeight(45)  # FORCE header height
+        h_header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        h_header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)  # Fixed widths
+        h_header.setStyleSheet("""
+            QHeaderView::section {
+                background-color: #3d3d3d;
+                color: #ffffff;
+                padding: 12px 10px;
+                border: 1px solid #4d4d4d;
+                border-bottom: 2px solid #0078d4;
+                font-weight: bold;
+                font-size: 13px;
+            }
+        """)
         
-        self.results_table.setAlternatingRowColors(True)
+        # ✅ FIX: Hide vertical header
         self.results_table.verticalHeader().setVisible(False)
         
+        # ✅ FIX: Set FIXED column widths
+        self.results_table.setColumnWidth(0, 100)  # Date
+        self.results_table.setColumnWidth(1, 90)   # Time  
+        self.results_table.setColumnWidth(2, 110)  # Test
+        self.results_table.setColumnWidth(3, 180)  # Command
+        self.results_table.setColumnWidth(4, 80)   # Status
+        self.results_table.setColumnWidth(5, 230)  # Output
+        self.results_table.setColumnWidth(6, 100)  # Operator
+        
+        # ✅ FIX: Table behavior settings
+        self.results_table.setAlternatingRowColors(True)
+        self.results_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.results_table.setShowGrid(True)
+        self.results_table.setGridStyle(Qt.PenStyle.SolidLine)
+        self.results_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)  # Read-only
+        
+        # ✅ FIX: CRITICAL - Set size policy to FIXED height behavior
+        self.results_table.setSizeAdjustPolicy(QTableWidget.SizeAdjustPolicy.AdjustIgnored)
+        self.results_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.results_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        
+        # ✅ FIX: Force minimum and maximum size
+        self.results_table.setMinimumHeight(320)  # Always at least this tall
+        self.results_table.setMaximumHeight(600)  # But don't exceed this
+        
+        # ✅ FIX: Apply table stylesheet
+        self.results_table.setStyleSheet("""
+            QTableWidget {
+                background-color: #1e1e1e;
+                border: 2px solid #3d3d3d;
+                border-radius: 5px;
+                gridline-color: #4d4d4d;
+                color: #e6e6e6;
+                font-size: 13px;
+            }
+            QTableWidget::item {
+                padding: 10px 8px;
+                border-bottom: 1px solid #3d3d3d;
+            }
+            QTableWidget::item:alternate {
+                background-color: #252526;
+            }
+            QTableWidget::item:selected {
+                background-color: #0078d4;
+                color: white;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: #2d2d2d;
+                width: 12px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #4d4d4d;
+                min-height: 20px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #5d5d5d;
+            }
+        """)
+        
+        # ✅ FIX: Add table with NO stretch factor
         frame_layout.addWidget(self.results_table)
+        
         frame.setLayout(frame_layout)
+        
+        # ✅ FIX: Add frame with NO stretch
         parent_layout.addWidget(frame)
+    
+    def _update_table_status_from_checkbox(self, test_name: str, status: str):
+        """Update table status column when user clicks Pass/Fail checkbox"""
+        table = self.results_table
+        # Find row with matching test name (column 2 is Test)
+        for row in range(table.rowCount()):
+            test_item = table.item(row, 2)  # Test column
+            if test_item and test_item.text() == test_name:
+                # Update Status column (column 4)
+                status_display = "🟢 PASS" if status == "PASS" else "🔴 FAIL"
+                status_item = QTableWidgetItem(status_display)
+                from PyQt6.QtGui import QColor
+                status_item.setForeground(QColor("#4caf50" if status == "PASS" else "#d32f2f"))
+                table.setItem(row, 4, status_item)
+                break
     
     def get_button_style(self, color: str):
         return f"""
@@ -566,13 +707,16 @@ class MainContentPanel(QWidget):
             QTableWidget::item:alternate {
                 background-color: #252526;
             }
+            QTableWidget::item:selected {
+                background-color: #0078d4;
+            }
             QHeaderView::section {
                 background-color: #2d2d2d;
-                color: #fff;
+                color: #ffffff;
                 padding: 10px;
-                border: none;
+                border: 1px solid #3d3d3d;
                 font-weight: bold;
-                font-size: 12px;
+                font-size: 13px;
             }
         """
     
@@ -601,7 +745,7 @@ class CameraTestMainWindow(QMainWindow):
         self.setMinimumSize(1500, 900)  # REDUCED from 950
         self.setStyleSheet("background-color: #1e1e1e; color: #fff;")
         self.telnet_pool = None
-        self.websocket_manager = None
+        self.tcp_listener = None
         self.init_ui()
     
     def init_ui(self):
@@ -639,23 +783,30 @@ class CameraTestMainWindow(QMainWindow):
     
     @pyqtSlot(str, str)
     def on_add_camera_requested(self, ip: str, serial: str):
+        """Handle add camera request - use QTimer pattern to enter qasync context"""
         logger.info(f"Add camera request: {serial} at {ip}")
         self.camera_list_panel.add_camera(serial, "disconnected")
+        
         if hasattr(self, '_parent_app') and self._parent_app:
+            # Use nested QTimer pattern (same as test buttons in app.py)
+            def schedule_task():
+                try:
+                    import asyncio
+                    # Now we're in qasync context - get_running_loop() will work
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self._parent_app.handle_add_camera(ip, serial))
+                except RuntimeError as e:
+                    logger.error(f"No running event loop: {e}")
+                    from PyQt6.QtWidgets import QMessageBox
+                    QMessageBox.critical(
+                        self,
+                        "Error",
+                        "Event loop not available. Please restart the application."
+                    )
+            
+            # Defer to next Qt event loop iteration (allows qasync loop to become active)
             from PyQt6.QtCore import QTimer
-            QTimer.singleShot(0, lambda: self._call_async_method(ip, serial))
-    
-    def _call_async_method(self, ip: str, serial: str):
-        if hasattr(self, '_parent_app') and self._parent_app:
-            import asyncio
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.create_task(self._parent_app.handle_add_camera(ip, serial))
-                else:
-                    asyncio.run(self._parent_app.handle_add_camera(ip, serial))
-            except Exception as e:
-                logger.error(f"Error calling async method: {e}")
+            QTimer.singleShot(0, schedule_task)
     
     @pyqtSlot(str)
     def on_camera_selected(self, camera_serial: str):

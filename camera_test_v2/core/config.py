@@ -17,11 +17,19 @@ class Config:
     TELNET_MAX_RETRIES: int = 3
     TELNET_RETRY_DELAY: int = 2
     
-    # WebSocket Settings
+    # WebSocket Settings (deprecated - use TCP instead)
     WEBSOCKET_URL: str = "ws://localhost:8080"
     WEBSOCKET_TIMEOUT: int = 30
     WEBSOCKET_PING_INTERVAL: int = 20
     WEBSOCKET_READY_MESSAGE: str = "I am ready"
+    
+    # TCP Listener Settings (replaces WebSocket)
+    TCP_HOST: str = "localhost"
+    TCP_PORT: int = 8080
+    TCP_TIMEOUT: int = 30
+    TCP_RECONNECT_DELAY: int = 5
+    TCP_MAX_RECONNECT_ATTEMPTS: int = 10
+    TCP_READY_MESSAGE: str = "I am ready"
     
     # Database Settings
     DB_HOST: str = "localhost"
